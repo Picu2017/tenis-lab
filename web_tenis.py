@@ -9,23 +9,24 @@ import time
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab")
 
-# Selector de archivos en el cuerpo de la página
+# Selector de archivos
 uploaded_file = st.file_uploader("Elegí un video de tu galería", type=['mp4', 'mov', 'avi'])
 
 # Configuración lateral
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Reproducir Análisis', value=True)
 
-# Conexiones del esqueleto (13 puntos clave)
+# Conexiones del esqueleto
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
 if uploaded_file is not None:
-    # CARGA SEGURA: Solo inicializamos la IA cuando ya tenemos un video
-    # Esto evita el AttributeError al arrancar la app
-    mp_pose = mp.solutions.pose
-    pose_engine = mp_pose.Pose(
+    # --- CAMBIO CLAVE: IMPORTACIÓN DIRECTA ---
+    # Esto evita el error de "AttributeError" en la nube
+    from mediapipe.python.solutions.pose import Pose
+    
+    pose_engine = Pose(
         static_image_mode=False,
-        model_complexity=0, # Máxima velocidad para celulares
+        model_complexity=0, # Más rápido para celulares
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
@@ -36,7 +37,7 @@ if uploaded_file is not None:
     cap = cv2.VideoCapture(tfile.name)
     st_frame = st.empty()
 
-    # Índices según lateralidad
+    # Índices según mano
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
 
@@ -46,11 +47,11 @@ if uploaded_file is not None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Redimensionar para fluidez (480px es ideal para móviles)
+        # Redimensionar para fluidez
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w, _ = frame.shape
 
-        # Procesar esqueleto
+        # Procesar IA
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose_engine.process(img_rgb)
 
@@ -63,13 +64,13 @@ if uploaded_file is not None:
                 if p1.visibility > 0.5 and p2.visibility > 0.5:
                     cv2.line(frame, (int(p1.x*w), int(p1.y*h)), (int(p2.x*w), int(p2.y*h)), (0, 0, 0), 2)
             
-            # Dibujar articulaciones rojas
+            # Dibujar puntos rojos
             for i in [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
                 p = lm[i]
                 if p.visibility > 0.5:
                     cv2.circle(frame, (int(p.x*w), int(p.y*h)), 3, (0, 0, 255), -1)
 
-            # Eje vertical (blanco) y distancia de impacto
+            # Eje vertical (blanco) y distancia
             cx = int(lm[idx_c].x * w)
             cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 1)
             mx = int(lm[idx_m].x * w)
@@ -80,5 +81,3 @@ if uploaded_file is not None:
         time.sleep(0.01)
 
     cap.release()
-else:
-    st.info("Subí un video para analizar la biomecánica del golpe.")
