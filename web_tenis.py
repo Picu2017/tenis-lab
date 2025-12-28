@@ -4,17 +4,17 @@ import mediapipe as mp
 import numpy as np
 import tempfile
 
-# Configuración de página
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Tenis Lab Pro", layout="wide")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
-# Barra lateral
+# --- BARRA LATERAL ---
 st.sidebar.title("Configuración")
 uploaded_file = st.sidebar.file_uploader("Sube tu video", type=['mp4', 'mov', 'avi'])
 run = st.sidebar.checkbox('Ejecutar Video (Play/Pause)', value=True)
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 
-# Conexiones 13 puntos
+# Definición de conexiones (13 puntos)
 CONEXIONES_TENIS = [
     (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
     (11, 23), (12, 24), (23, 24),
@@ -27,20 +27,20 @@ if mano_dominante == "Derecha":
 else: 
     IDX_MUÑECA, IDX_CADERA = 15, 23
 
-# --- CARGA SEGURA DE MEDIAPIPE ---
-# Usamos el inicializador de base para evitar el AttributeError
-PoseModel = mp.solutions.pose.Pose
+# --- CARGA SEGURA DE MEDIAPIPE (TRUCO FINAL) ---
+# En lugar de usar mp.solutions.pose, entramos por la puerta trasera del módulo
+from mediapipe.python.solutions.pose import Pose
 
 @st.cache_resource
-def load_model():
-    return PoseModel(
+def load_pose_detector():
+    return Pose(
         static_image_mode=False,
         model_complexity=1,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
 
-pose = load_model()
+pose = load_pose_detector()
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False) 
@@ -82,3 +82,5 @@ if uploaded_file is not None:
 
         st_video.image(frame, channels="BGR", use_container_width=True)
     cap.release()
+else:
+    st.info("Sube tu video para comenzar el análisis profesional.")
