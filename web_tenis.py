@@ -4,7 +4,7 @@ import mediapipe as mp
 import numpy as np
 import tempfile
 
-# Configuración inicial
+# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Tenis Lab Pro", layout="wide")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
@@ -14,7 +14,7 @@ uploaded_file = st.sidebar.file_uploader("Sube tu video", type=['mp4', 'mov', 'a
 run = st.sidebar.checkbox('Ejecutar Video (Play/Pause)', value=True)
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 
-# Conexiones del esqueleto (13 puntos)
+# Definición de conexiones (13 puntos)
 CONEXIONES_TENIS = [
     (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
     (11, 23), (12, 24), (23, 24),
@@ -27,14 +27,20 @@ if mano_dominante == "Derecha":
 else: 
     IDX_MUÑECA, IDX_CADERA = 15, 23
 
-# --- CARGA DEL MODELO (Sin caché para evitar errores) ---
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=False,
-    model_complexity=1,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+# --- INICIALIZACIÓN DE MEDIAPIPE (Versión Segura para Cloud) ---
+# Accedemos directamente a la clase Pose para evitar el error de soluciones.pose
+from mediapipe.python.solutions import pose as mp_pose_module
+
+@st.cache_resource
+def get_pose_instance():
+    return mp_pose_module.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
+pose = get_pose_instance()
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False) 
@@ -48,11 +54,11 @@ if uploaded_file is not None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Procesamiento en resolución moderada para velocidad
+        # Redimensionar para fluidez
         h_orig, w_orig = frame.shape[:2]
-        ancho_web = 640
-        alto_web = int((h_orig / w_orig) * ancho_web)
-        frame = cv2.resize(frame, (ancho_web, alto_web))
+        ancho_f = 640
+        alto_f = int((h_orig / w_orig) * ancho_f)
+        frame = cv2.resize(frame, (ancho_f, alto_f))
         
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(img_rgb)
@@ -60,26 +66,24 @@ if uploaded_file is not None:
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
             
-            # Dibujar esqueleto (Líneas negras)
+            # Dibujar esqueleto (Negro)
             for connection in CONEXIONES_TENIS:
-                p1 = lm[connection[0]]
-                p2 = lm[connection[1]]
+                p1, p2 = lm[connection[0]], lm[connection[1]]
                 if p1.visibility > 0.5 and p2.visibility > 0.5:
-                    cv2.line(frame, (int(p1.x*ancho_web), int(p1.y*alto_web)), 
-                             (int(p2.x*ancho_web), int(p2.y*alto_web)), (0, 0, 0), 2)
+                    cv2.line(frame, (int(p1.x*ancho_f), int(p1.y*alto_f)), 
+                             (int(p2.x*ancho_f), int(p2.y*alto_f)), (0, 0, 0), 2)
 
-            # Dibujar puntos (Rojos)
+            # Dibujar puntos (Rojo)
             for idx in PUNTOS_CONTROL:
                 punto = lm[idx]
                 if punto.visibility > 0.5:
                     color = (255, 255, 255) if idx == 0 else (0, 0, 255)
-                    cv2.circle(frame, (int(punto.x*ancho_web), int(punto.y*alto_web)), 3, color, -1)
+                    cv2.circle(frame, (int(punto.x*ancho_f), int(punto.y*alto_f)), 3, color, -1)
 
-            # Plano del cuerpo
-            cadera_x = int(lm[IDX_CADERA].x * ancho_web)
-            muñeca_x = int(lm[IDX_MUÑECA].x * ancho_web)
-            cv2.line(frame, (cadera_x, 0), (cadera_x, alto_web), (255, 255, 255), 1)
-            
+            # Línea vertical y distancia
+            cadera_x = int(lm[IDX_CADERA].x * ancho_f)
+            muñeca_x = int(lm[IDX_MUÑECA].x * ancho_f)
+            cv2.line(frame, (cadera_x, 0), (cadera_x, alto_f), (255, 255, 255), 1)
             dist_px = int(muñeca_x - cadera_x if mano_dominante == "Derecha" else cadera_x - muñeca_x)
             cv2.putText(frame, f"Dist. Plano: {dist_px}px", (20, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -87,4 +91,4 @@ if uploaded_file is not None:
         st_video.image(frame, channels="BGR", use_container_width=True)
     cap.release()
 else:
-    st.info("Sube un video para comenzar el análisis biomecánico.")
+    st.info("Sube tu video para comenzar el análisis biomecánico.")
