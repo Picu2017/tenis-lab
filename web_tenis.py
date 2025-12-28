@@ -27,20 +27,19 @@ if mano_dominante == "Derecha":
 else: 
     IDX_MUÑECA, IDX_CADERA = 15, 23
 
-# --- CARGA SEGURA DE MEDIAPIPE (TRUCO FINAL) ---
-# En lugar de usar mp.solutions.pose, entramos por la puerta trasera del módulo
-from mediapipe.python.solutions.pose import Pose
-
+# --- CARGA DEL MODELO ---
 @st.cache_resource
-def load_pose_detector():
-    return Pose(
+def get_pose():
+    # Usamos la carga estándar pero dentro de una función con caché
+    mp_pose = mp.solutions.pose
+    return mp_pose.Pose(
         static_image_mode=False,
         model_complexity=1,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
 
-pose = load_pose_detector()
+pose = get_pose()
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False) 
