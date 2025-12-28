@@ -5,22 +5,21 @@ import tempfile
 import time
 import os
 
-# --- IMPORTACIÓN ROBUSTA ---
+# Importación segura de MediaPipe
 try:
     import mediapipe as mp
-    # Importamos los componentes directamente para saltar el error de 'solutions'
-    from mediapipe.python.solutions import pose as mp_pose
+    mp_pose = mp.solutions.pose
 except Exception as e:
-    st.error(f"Error crítico de librería: {e}")
+    st.error(f"Error cargando librerías: {e}")
     st.stop()
 
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
-# --- INICIALIZACIÓN DEL MOTOR ---
+# --- INICIALIZACIÓN DEL MOTOR IA ---
 @st.cache_resource
 def get_pose_instance():
-    # model_complexity=0 es esencial para evitar errores de permisos en la nube
+    # model_complexity=0 es vital para evitar el error de permisos [Errno 13]
     return mp_pose.Pose(
         static_image_mode=False,
         model_complexity=0, 
@@ -39,13 +38,13 @@ uploaded_file = st.file_uploader("Subí tu video aquí", type=['mp4', 'mov', 'av
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Analizar / Pausar', value=True)
 
-# Esqueleto simplificado para tenis
+# Conexiones 13 puntos para el esqueleto (Tenis)
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
 
 
 if uploaded_file is not None:
-    # Usamos /tmp porque es la única carpeta con permisos de escritura reales
+    # Usamos /tmp porque es la única carpeta con permisos de escritura reales en la nube
     tfile = tempfile.NamedTemporaryFile(delete=False, dir='/tmp', suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
@@ -53,7 +52,7 @@ if uploaded_file is not None:
     cap = cv2.VideoCapture(tfile.name)
     frame_window = st.empty() 
 
-    # Índices biomecánicos
+    # Índices biomecánicos (Muñeca y Cadera)
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
 
@@ -63,7 +62,7 @@ if uploaded_file is not None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Redimensionar para que el video no se trabe en la web
+        # Redimensionar para fluidez web
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w = frame.shape[:2]
 
@@ -81,7 +80,8 @@ if uploaded_file is not None:
                     cv2.line(frame, (int(p1.x*w), int(p1.y*h)), (int(p2.x*w), int(p2.y*h)), (0, 0, 0), 2)
             
             # Puntos clave rojos
-            for i in [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
+            puntos_clave = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
+            for i in puntos_clave:
                 p = lm[i]
                 if p.visibility > 0.5:
                     cv2.circle(frame, (int(p.x*w), int(p.y*h)), 4, (0, 0, 255), -1)
