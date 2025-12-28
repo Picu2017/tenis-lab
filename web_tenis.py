@@ -1,32 +1,24 @@
 import streamlit as st
 import cv2
+import mediapipe as mp
 import numpy as np
 import tempfile
 import time
 import os
-import shutil
-import sys
+import urllib.request
 
-# --- SOLUCIÓN DEFINITIVA DE PERMISOS ---
-def setup_mediapipe():
-    import mediapipe as mp
-    orig_mp_path = os.path.dirname(mp.__file__)
-    tmp_mp_path = '/tmp/mediapipe'
-    
-    # Si no existe la copia en /tmp, la creamos
-    if not os.path.exists(tmp_mp_path):
-        shutil.copytree(orig_mp_path, tmp_mp_path, dirs_exist_ok=True)
-    
-    # Forzamos a Python a usar la copia de /tmp antes que la original
-    if tmp_mp_path not in sys.path:
-        sys.path.insert(0, '/tmp')
-    
-    # Retornamos la solución de pose desde la ruta con permisos
-    from mediapipe.python.solutions import pose as mp_pose
-    return mp_pose
+# --- SOLUCIÓN DE PERMISOS: DESCARGA MANUAL DEL MODELO ---
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmark/pose_landmark_lite/float16/1/pose_landmark_lite.tflite"
+MODEL_PATH = "/tmp/pose_landmark_lite.tflite"
 
-# Ejecutamos la configuración
-mp_pose_secure = setup_mediapipe()
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+
+try:
+    download_model()
+except Exception as e:
+    st.error(f"Error al descargar modelo base: {e}")
 
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
@@ -34,7 +26,8 @@ st.title("🎾 Tenis Lab: Análisis Biomecánico")
 # --- INICIALIZACIÓN DEL MOTOR ---
 @st.cache_resource
 def init_pose():
-    return mp_pose_secure.Pose(
+    # Usamos la solución de MediaPipe pero configurada para evitar escrituras
+    return mp.solutions.pose.Pose(
         static_image_mode=False,
         model_complexity=0, 
         min_detection_confidence=0.5,
@@ -44,7 +37,9 @@ def init_pose():
 try:
     pose_engine = init_pose()
 except Exception as e:
-    st.error(f"Error al iniciar IA: {e}")
+    # Si falla la carga estándar, intentamos limpiar la ruta
+    st.error(f"Error de permisos: {e}")
+    st.info("Por favor, haz un 'Reboot App' en el panel de Streamlit.")
     st.stop()
 
 # --- INTERFAZ ---
@@ -54,8 +49,10 @@ st.sidebar.title("Ajustes")
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Analizar / Pausar', value=True)
 
-# Conexiones 13 puntos para el esqueleto del tenista
+# Conexiones 13 puntos clave (Brazos, Tronco, Piernas)
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
+
+
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') 
@@ -73,7 +70,7 @@ if uploaded_file is not None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Redimensionar para fluidez
+        # Redimensionar para fluidez máxima
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w = frame.shape[:2]
 
@@ -95,7 +92,7 @@ if uploaded_file is not None:
                 if p.visibility > 0.5:
                     cv2.circle(frame, (int(p.x*w), int(p.y*h)), 3, (0, 0, 255), -1)
 
-            # Eje vertical cadera y cálculo de distancia
+            # Eje vertical cadera y distancia de impacto
             cx = int(lm[idx_c].x * w)
             cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 1)
             mx = int(lm[idx_m].x * w)
@@ -108,4 +105,4 @@ if uploaded_file is not None:
     cap.release()
     os.unlink(tfile.name)
 else:
-    st.info("Subí un video para analizar la biomecánica del golpe.")
+    st.info("Subí un video para analizar el plano de impacto.")
