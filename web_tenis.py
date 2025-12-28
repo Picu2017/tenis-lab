@@ -4,7 +4,7 @@ import mediapipe as mp
 import numpy as np
 import tempfile
 
-# Configuración básica
+# Configuración de página
 st.set_page_config(page_title="Tenis Lab Pro", layout="wide")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
@@ -27,9 +27,20 @@ if mano_dominante == "Derecha":
 else: 
     IDX_MUÑECA, IDX_CADERA = 15, 23
 
-# Inicialización estándar (La más compatible)
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(model_complexity=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+# --- CARGA SEGURA DE MEDIAPIPE ---
+# Usamos el inicializador de base para evitar el AttributeError
+PoseModel = mp.solutions.pose.Pose
+
+@st.cache_resource
+def load_model():
+    return PoseModel(
+        static_image_mode=False,
+        model_complexity=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
+pose = load_model()
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False) 
@@ -44,7 +55,6 @@ if uploaded_file is not None:
             continue
 
         h_orig, w_orig = frame.shape[:2]
-        # Redimensionar para que no pese en el celular
         frame = cv2.resize(frame, (640, int(h_orig * 640 / w_orig)))
         h, w = frame.shape[:2]
 
@@ -53,21 +63,17 @@ if uploaded_file is not None:
 
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
-            
-            # Dibujar esqueleto (Líneas Negras)
             for connection in CONEXIONES_TENIS:
                 p1, p2 = lm[connection[0]], lm[connection[1]]
                 if p1.visibility > 0.5 and p2.visibility > 0.5:
                     cv2.line(frame, (int(p1.x*w), int(p1.y*h)), (int(p2.x*w), int(p2.y*h)), (0, 0, 0), 2)
 
-            # Dibujar puntos (Rojos)
             for idx in PUNTOS_CONTROL:
                 punto = lm[idx]
                 if punto.visibility > 0.5:
                     color = (255, 255, 255) if idx == 0 else (0, 0, 255)
                     cv2.circle(frame, (int(punto.x*w), int(punto.y*h)), 3, color, -1)
 
-            # Plano y distancia
             cadera_x = int(lm[IDX_CADERA].x * w)
             muñeca_x = int(lm[IDX_MUÑECA].x * w)
             cv2.line(frame, (cadera_x, 0), (cadera_x, h), (255, 255, 255), 1)
