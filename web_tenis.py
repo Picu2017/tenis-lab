@@ -4,22 +4,40 @@ import numpy as np
 import tempfile
 import time
 import os
+import shutil
+import sys
 
-# Forzamos la importación desde la ruta raíz para evitar el AttributeError
-try:
+# --- CONFIGURACIÓN DE PERMISOS (EL TRUCO) ---
+def inicializar_entorno():
     import mediapipe as mp
+    # Ubicación original y ubicación con permisos
+    path_original = os.path.dirname(mp.__file__)
+    path_temporal = "/tmp/mediapipe"
+    
+    # Copiamos la librería entera a una zona con permisos de escritura
+    if not os.path.exists(path_temporal):
+        shutil.copytree(path_original, path_temporal, dirs_exist_ok=True)
+    
+    # Forzamos a Python a leer mediapipe desde /tmp
+    if "/tmp" not in sys.path:
+        sys.path.insert(0, "/tmp")
+    
     from mediapipe.python.solutions import pose as mp_pose
-    from mediapipe.python.solutions import drawing_utils as mp_drawing
-except ImportError as e:
-    st.error(f"Error al cargar librerías base: {e}")
+    return mp_pose
+
+# Ejecutamos el parche
+try:
+    mp_pose = inicializar_entorno()
+except Exception as e:
+    st.error(f"Error preparando entorno: {e}")
     st.stop()
 
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
-# --- INICIALIZACIÓN DEL MOTOR IA ---
+# --- INICIALIZACIÓN DE IA ---
 @st.cache_resource
-def get_pose_instance():
+def load_pose_engine():
     return mp_pose.Pose(
         static_image_mode=False,
         model_complexity=0, 
@@ -27,24 +45,20 @@ def get_pose_instance():
         min_tracking_confidence=0.5
     )
 
-try:
-    pose_engine = get_pose_instance()
-except Exception as e:
-    st.error(f"Error de inicialización: {e}")
-    st.stop()
+pose = load_pose_engine()
 
 # --- INTERFAZ ---
 uploaded_file = st.file_uploader("Subí tu video aquí", type=['mp4', 'mov', 'avi'])
-
-st.sidebar.title("Configuración")
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Reproducir Análisis', value=True)
 
-# Esqueleto de 13 puntos clave (Biomecánica del tenis)
+# Esqueleto simplificado para tenis
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
+
+
 if uploaded_file is not None:
-    # Usamos /tmp para asegurar permisos de escritura del video temporal
+    # Guardamos video en zona segura
     tfile = tempfile.NamedTemporaryFile(delete=False, dir='/tmp', suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
@@ -52,7 +66,7 @@ if uploaded_file is not None:
     cap = cv2.VideoCapture(tfile.name)
     frame_window = st.empty() 
 
-    # Índices según lateralidad (Muñeca y Cadera)
+    # Marcadores de análisis
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
 
@@ -62,31 +76,27 @@ if uploaded_file is not None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Redimensionar para fluidez móvil
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w = frame.shape[:2]
 
-        # Procesar con IA
-        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose_engine.process(img_rgb)
+        results = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
             
-            # Dibujar esqueleto (Líneas negras)
+            # Dibujar esqueleto negro
             for s, e in CONEXIONES:
                 p1, p2 = lm[s], lm[e]
                 if p1.visibility > 0.5 and p2.visibility > 0.5:
                     cv2.line(frame, (int(p1.x*w), int(p1.y*h)), (int(p2.x*w), int(p2.y*h)), (0, 0, 0), 2)
             
             # Dibujar puntos rojos
-            puntos_interes = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
-            for i in puntos_interes:
+            for i in [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
                 p = lm[i]
                 if p.visibility > 0.5:
                     cv2.circle(frame, (int(p.x*w), int(p.y*h)), 3, (0, 0, 255), -1)
 
-            # Eje vertical y distancia de impacto
+            # Eje vertical y distancia
             cx = int(lm[idx_c].x * w)
             mx = int(lm[idx_m].x * w)
             cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 1)
@@ -97,7 +107,4 @@ if uploaded_file is not None:
         time.sleep(0.01)
 
     cap.release()
-    if os.path.exists(tfile.name):
-        os.remove(tfile.name)
-else:
-    st.info("Subí un video para analizar la biomecánica del golpe.")
+    os.unlink(tfile.name)
