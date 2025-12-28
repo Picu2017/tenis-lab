@@ -1,47 +1,48 @@
 import streamlit as st
 import cv2
+import mediapipe as mp
 import numpy as np
 import tempfile
 import time
 
-# IMPORTACIÓN DIRECTA (Esto salta el error de 'solutions')
-try:
-    import mediapipe as mp
-    from mediapipe.python.solutions import pose as mp_pose
-except ImportError:
-    st.error("Error al cargar las librerías. Por favor, reinicia la app.")
-
+# Configuración de página
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab")
 
-uploaded_file = st.file_uploader("Elegí un video de tu galería", type=['mp4', 'mov', 'avi'])
+# --- CARGA SEGURA DE MOTOR IA ---
+@st.cache_resource
+def get_pose_engine():
+    # Usamos la ruta más estándar de todas
+    return mp.solutions.pose.Pose(
+        static_image_mode=False,
+        model_complexity=1, 
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
+# Intentamos cargar el motor, si falla damos aviso claro
+try:
+    pose = get_pose_engine()
+    st.success("✅ Sistema biomecánico listo")
+except Exception as e:
+    st.error("⚠️ Error de inicialización. Por favor, dale a 'Reboot App' en el menú lateral de Streamlit.")
+    st.stop()
+
+# --- INTERFAZ ---
+uploaded_file = st.file_uploader("Subí tu video aquí", type=['mp4', 'mov', 'avi'])
 
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Reproducir Análisis', value=True)
 
-# Conexiones del esqueleto
+# Conexiones 13 puntos
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
 if uploaded_file is not None:
-    # --- INICIALIZACIÓN BLINDADA ---
-    try:
-        # Usamos model_complexity=1 que es el más estable en la nube
-        pose_engine = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1, 
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-    except Exception as e:
-        st.error(f"Error técnico: {e}")
-        st.stop()
-
     tfile = tempfile.NamedTemporaryFile(delete=False) 
     tfile.write(uploaded_file.read())
     cap = cv2.VideoCapture(tfile.name)
     st_frame = st.empty()
 
-    # Índices según mano (Muñeca y Cadera)
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
 
@@ -55,26 +56,23 @@ if uploaded_file is not None:
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w, _ = frame.shape
 
-        # Procesar IA
+        # Procesar esqueleto
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose_engine.process(img_rgb)
+        results = pose.process(img_rgb)
 
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
-            
-            # Dibujar esqueleto negro
-            for start, end in CONEXIONES:
-                p1, p2 = lm[start], lm[end]
+            # Dibujar líneas negras
+            for s, e in CONEXIONES:
+                p1, p2 = lm[s], lm[e]
                 if p1.visibility > 0.5 and p2.visibility > 0.5:
                     cv2.line(frame, (int(p1.x*w), int(p1.y*h)), (int(p2.x*w), int(p2.y*h)), (0, 0, 0), 2)
-            
-            # Dibujar puntos rojos
+            # Puntos rojos
             for i in [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
                 p = lm[i]
                 if p.visibility > 0.5:
                     cv2.circle(frame, (int(p.x*w), int(p.y*h)), 3, (0, 0, 255), -1)
-
-            # Eje vertical cadera (Blanco) y cálculo de distancia
+            # Eje vertical cadera
             cx = int(lm[idx_c].x * w)
             cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 1)
             mx = int(lm[idx_m].x * w)
@@ -83,5 +81,4 @@ if uploaded_file is not None:
 
         st_frame.image(frame, channels="BGR", use_container_width=True)
         time.sleep(0.01)
-
     cap.release()
