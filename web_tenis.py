@@ -4,6 +4,7 @@ import tempfile
 import numpy as np
 import mediapipe as mp
 import gc
+import os
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Tenis Lab Móvil", layout="wide")
@@ -28,21 +29,46 @@ st.write("### 🎾 Tenis Lab: Análisis Móvil")
 # --- MOTOR IA (Instancia única por sesión) ---
 if 'pose' not in st.session_state:
     mp_pose = mp.solutions.pose
-    st.session_state.pose = mp_pose.Pose(
-        static_image_mode=False,
-        model_complexity=0,            # CAMBIO CLAVE: 0 es más rápido para móviles (Lite)
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
-    )
+    
+    # INTENTO DE CARGA SEGURA (Usa el archivo local para evitar errores de nube)
+    try:
+        # Primero intentamos carga normal
+        st.session_state.pose = mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=0, # 0 = Lite (Rápido para celular)
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+    except Exception:
+        # Si falla (tu error actual), forzamos el archivo local que subiste
+        # El archivo debe llamarse EXACTAMENTE 'pose_landmark_lite.tflite'
+        path_modelo = 'pose_landmark_lite.tflite'
+        if os.path.exists(path_modelo):
+            with open(path_modelo, 'rb') as f:
+                model_content = f.read()
+            
+            # Forzamos la carga del archivo local
+            st.session_state.pose = mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=0,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                model_asset_path=path_modelo # <--- CLAVE: Carga manual
+            )
+        else:
+            st.error("⚠️ No encuentro el archivo 'pose_landmark_lite.tflite' en GitHub.")
 
-pose = st.session_state.pose
+# Asignamos a variable local
+if 'pose' in st.session_state:
+    pose = st.session_state.pose
+else:
+    st.stop() # Detiene la app si no hay modelo
 
 # --- MEMORIA DE NAVEGACIÓN ---
 if 'frame_index' not in st.session_state:
     st.session_state.frame_index = 0
 
 # --- CARGA DE VIDEO ---
-# accept_multiple_files=False ayuda en móviles
 uploaded_file = st.file_uploader("Toca para elegir video", type=['mp4', 'mov', 'avi'])
 
 # CONEXIONES DEL ESQUELETO
@@ -64,8 +90,7 @@ if uploaded_file is not None:
     if total_frames > 0:
         
         # --- CONTROLES GRANDES ---
-        # Usamos columnas para poner los botones abajo o arriba del video según prefieras
-        col_video, col_controls = st.columns([1, 100]) # Truco para centrar en móvil
+        col_video, col_controls = st.columns([1, 100]) # Truco visual
         
         # NAVEGACIÓN
         c1, c2, c3 = st.columns([1, 2, 1])
@@ -84,44 +109,9 @@ if uploaded_file is not None:
         ret, frame = cap.read()
         
         if ret:
-            # --- MAGIA DE OPTIMIZACIÓN ---
-            # Si el video es gigante (ej: 4K del celular), lo achicamos
+            # --- MAGIA DE OPTIMIZACIÓN (ACHICAR VIDEO 4K) ---
             h, w = frame.shape[:2]
-            ANCHO_MAXIMO = 640 # Resolución segura para la nube
+            ANCHO_MAXIMO = 640 
             
             if w > ANCHO_MAXIMO:
                 factor = ANCHO_MAXIMO / w
-                nuevo_alto = int(h * factor)
-                frame = cv2.resize(frame, (ANCHO_MAXIMO, nuevo_alto))
-                h, w = frame.shape[:2] # Actualizamos dimensiones
-
-            # Procesar IA
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(frame_rgb)
-            
-            if results.pose_landmarks:
-                lm = results.pose_landmarks.landmark
-                
-                # Dibujar esqueleto
-                for p_start, p_end in CONEXIONES_TENIS:
-                    if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
-                        pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
-                        pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
-                        cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
-
-                for i in PUNTOS_CLAVE:
-                    p = lm[i]
-                    if p.visibility > 0.5:
-                        center = (int(p.x*w), int(p.y*h))
-                        cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
-
-            st.image(frame, channels="BGR", use_container_width=True)
-            
-        else:
-            st.warning("Error leyendo el cuadro.")
-            
-    cap.release()
-    gc.collect()
-
-else:
-    st.info("👆 Sube un video para empezar")
