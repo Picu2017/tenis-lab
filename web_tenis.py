@@ -1,26 +1,25 @@
 import streamlit as st
 import cv2
+import mediapipe as mp
 import numpy as np
 import tempfile
 import time
 import os
 
-# --- SOLUCIÓN AL ERROR DE PERMISOS (Errno 13) ---
-# Forzamos a MediaPipe a usar /tmp para sus archivos de modelo
+# --- PARCHE DE PERMISOS PARA LA NUBE ---
+# Obligamos a MediaPipe a usar /tmp para evitar el Permission Denied
 os.environ['MEDIAPIPE_MODEL_PATH'] = '/tmp'
-
-import mediapipe as mp
-from mediapipe.python.solutions import pose as mp_pose
 
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 st.title("🎾 Tenis Lab: Análisis Biomecánico")
 
 # --- INICIALIZACIÓN SIN CACHÉ ---
-# Quitamos el @st.cache_resource para evitar que el error de permisos se guarde en memoria
+# Quitamos el @st.cache_resource para forzar una carga limpia
 try:
-    pose_engine = mp_pose.Pose(
+    # model_complexity=0 es el modelo 'Lite', el más compatible
+    pose_engine = mp.solutions.pose.Pose(
         static_image_mode=False,
-        model_complexity=0, # El 0 es el modelo 'Lite', más compatible con servidores
+        model_complexity=0, 
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
@@ -42,7 +41,7 @@ CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 2
 
 
 if uploaded_file is not None:
-    # Guardamos video en /tmp (única zona con permisos de escritura)
+    # Guardamos video en /tmp (zona con permisos de escritura)
     tfile = tempfile.NamedTemporaryFile(delete=False, dir='/tmp', suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
@@ -50,7 +49,7 @@ if uploaded_file is not None:
     cap = cv2.VideoCapture(tfile.name)
     frame_window = st.empty() 
 
-    # Marcadores para el cálculo
+    # Marcadores para el cálculo (Muñeca y Cadera)
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
 
