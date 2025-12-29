@@ -1,13 +1,16 @@
+import os
+
+# --- 🛠️ CORRECCIÓN DE PERMISOS (EL TRUCO DE INGENIERO) ---
+# Antes de importar MediaPipe, le decimos que guarde sus modelos
+# en la carpeta temporal (/tmp) donde SIEMPRE tenemos permiso de escritura.
+os.environ["MEDIAPIPE_ASSET_CACHE_DIR"] = "/tmp"
+
 import streamlit as st
 import cv2
 import tempfile
 import numpy as np
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 import gc
-import os
-import urllib.request
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Tenis Lab Móvil", layout="wide")
@@ -28,59 +31,18 @@ st.markdown("""
 
 st.write("### 🎾 Tenis Lab: Análisis Móvil")
 
-# --- FUNCIÓN "SALVAVIDAS" PARA EL MODELO ---
-def conseguir_modelo():
-    """Busca el archivo localmente, y si no está, lo baja a temporales."""
-    nombre_archivo = 'pose_landmark_lite.tflite'
-    
-    # 1. Intentar ruta directa (si está en GitHub)
-    if os.path.exists(nombre_archivo):
-        return nombre_archivo
-    
-    # 2. Intentar ruta absoluta (a veces necesario en la nube)
-    ruta_absoluta = os.path.join(os.path.dirname(__file__), nombre_archivo)
-    if os.path.exists(ruta_absoluta):
-        return ruta_absoluta
+# --- MOTOR IA (VERSIÓN CLÁSICA ROBUSTA) ---
+# Usamos mp.solutions.pose que es más estable, pero con el arreglo de carpeta de arriba.
+if 'pose' not in st.session_state:
+    mp_pose = mp.solutions.pose
+    st.session_state.pose = mp_pose.Pose(
+        static_image_mode=False,
+        model_complexity=0,      # 0 = Lite (Rápido para celular)
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
 
-    # 3. PLAN B: Descargar a carpeta temporal (Donde SI tenemos permiso)
-    url_modelo = "https://storage.googleapis.com/mediapipe-assets/pose_landmark_lite.tflite"
-    path_temp = os.path.join(tempfile.gettempdir(), nombre_archivo)
-    
-    if not os.path.exists(path_temp):
-        try:
-            # st.info("Descargando modelo IA por primera vez...") # Descomentar para debug
-            urllib.request.urlretrieve(url_modelo, path_temp)
-        except Exception as e:
-            st.error(f"Fallo al descargar el modelo: {e}")
-            return None
-            
-    return path_temp
-
-# --- INICIALIZAR MOTOR IA ---
-if 'landmarker' not in st.session_state:
-    try:
-        model_path = conseguir_modelo()
-        
-        if model_path:
-            with open(model_path, 'rb') as f:
-                model_data = f.read()
-
-            base_options = python.BaseOptions(model_asset_buffer=model_data)
-            options = vision.PoseLandmarkerOptions(
-                base_options=base_options,
-                output_segmentation_masks=False,
-                min_pose_detection_confidence=0.5,
-                min_pose_presence_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            st.session_state.landmarker = vision.PoseLandmarker.create_from_options(options)
-        else:
-            st.error("❌ No se pudo encontrar ni descargar el modelo de IA.")
-            st.session_state.landmarker = None
-
-    except Exception as e:
-        st.error(f"Error crítico iniciando IA: {e}")
-        st.session_state.landmarker = None
+pose = st.session_state.pose
 
 # --- MEMORIA DE NAVEGACIÓN ---
 if 'frame_index' not in st.session_state:
@@ -89,13 +51,15 @@ if 'frame_index' not in st.session_state:
 # --- CARGA DE VIDEO ---
 uploaded_file = st.file_uploader("Toca para elegir video", type=['mp4', 'mov', 'avi'])
 
+# CONEXIONES DEL ESQUELETO
 CONEXIONES_TENIS = [
     (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), 
     (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28)
 ]
 PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
-if uploaded_file is not None and st.session_state.landmarker:
+if uploaded_file is not None:
+    # Guardado temporal
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
@@ -104,6 +68,8 @@ if uploaded_file is not None and st.session_state.landmarker:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
+        
+        # --- CONTROLES ---
         col_video, col_controls = st.columns([1, 100])
         
         c1, c2, c3 = st.columns([1, 2, 1])
@@ -117,25 +83,29 @@ if uploaded_file is not None and st.session_state.landmarker:
             st.slider("Timeline", 0, total_frames - 1, key='frame_index', label_visibility="collapsed")
             st.markdown(f"<p style='text-align: center;'>Cuadro: {st.session_state.frame_index}</p>", unsafe_allow_html=True)
 
+        # --- PROCESAMIENTO ---
         cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.frame_index)
         ret, frame = cap.read()
         
         if ret:
+            # OPTIMIZACIÓN DE TAMAÑO (Para que no explote la memoria)
             h, w = frame.shape[:2]
             ANCHO_MAXIMO = 640 
+            
             if w > ANCHO_MAXIMO:
                 factor = ANCHO_MAXIMO / w
                 nuevo_alto = int(h * factor)
                 frame = cv2.resize(frame, (ANCHO_MAXIMO, nuevo_alto))
-                h, w = frame.shape[:2]
+                h, w = frame.shape[:2] # Actualizamos dimensiones
 
+            # Procesar IA
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+            results = pose.process(frame_rgb)
             
-            detection_result = st.session_state.landmarker.detect(mp_image)
-            
-            if detection_result.pose_landmarks:
-                lm = detection_result.pose_landmarks[0]
+            if results.pose_landmarks:
+                lm = results.pose_landmarks.landmark
+                
+                # Dibujar esqueleto (Clásico y confiable)
                 for p_start, p_end in CONEXIONES_TENIS:
                     if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
                         pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
@@ -152,7 +122,9 @@ if uploaded_file is not None and st.session_state.landmarker:
             
         else:
             st.warning("Error leyendo el cuadro.")
+            
     cap.release()
     gc.collect()
-elif uploaded_file is None:
+
+else:
     st.info("👆 Sube un video para empezar")
