@@ -2,14 +2,14 @@ import streamlit as st
 import cv2
 import tempfile
 import time
-import numpy as np
 import mediapipe as mp
+import numpy as np
 
-# --- CONFIGURACIÓN ---
+# Configuración
 st.set_page_config(page_title="Tenis Lab", layout="centered")
+st.title("🎾 Tenis Lab: Análisis")
 
-# --- CARGA SEGURA DE MEDIAPIPE ---
-# Esta estructura es la más robusta para versiones antiguas
+# Carga directa de MediaPipe (como al principio)
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
@@ -20,34 +20,31 @@ pose = mp_pose.Pose(
     min_tracking_confidence=0.5
 )
 
-# --- INTERFAZ ---
-st.title("🎾 Tenis Lab: Análisis")
-
 uploaded_file = st.file_uploader("Subí tu video", type=['mp4', 'mov', 'avi'])
-run = st.checkbox('Procesar Video', value=True)
+run = st.checkbox('Procesar', value=True)
 
 if uploaded_file is not None:
-    # Archivo temporal
     tfile = tempfile.NamedTemporaryFile(delete=False) 
     tfile.write(uploaded_file.read())
     
     cap = cv2.VideoCapture(tfile.name)
-    stframe = st.empty() # Placeholder para video
+    stframe = st.empty()
     
     while cap.isOpened() and run:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 1. Redimensionar (CRÍTICO para que no se congele)
-        # Bajamos la resolución para que el navegador aguante el flujo
+        # Redimensionamos para que no pese tanto en el navegador
         frame = cv2.resize(frame, (640, 360))
         
-        # 2. IA
+        # Convertir a RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Procesar
         results = pose.process(frame_rgb)
 
-        # 3. Dibujar
+        # Dibujar
         if results.pose_landmarks:
             mp_drawing.draw_landmarks(
                 frame, 
@@ -55,11 +52,10 @@ if uploaded_file is not None:
                 mp_pose.POSE_CONNECTIONS
             )
 
-        # 4. Mostrar
+        # Mostrar
         stframe.image(frame, channels="BGR", use_container_width=True)
         
-        # --- EL SECRETO ANTI-CONGELAMIENTO ---
-        # 50ms de pausa para liberar memoria y CPU
-        time.sleep(0.05) 
+        # PEQUEÑA PAUSA (Esto evita que se congele como te pasaba antes)
+        time.sleep(0.04)
 
     cap.release()
