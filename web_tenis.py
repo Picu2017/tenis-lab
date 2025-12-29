@@ -9,29 +9,24 @@ import gc
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Tenis Lab Móvil", layout="centered")
 
-# CSS AGRESIVO para ganar espacio en pantalla
+# CSS para maximizar espacio
 st.markdown("""
     <style>
         .stDeployButton {display:none;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        
-        /* Quita el espacio blanco de arriba para que el video suba */
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: 0rem !important;
             padding-bottom: 1rem !important;
         }
-        
-        /* Ajuste visual del slider */
         .stSlider {
             padding-top: 1rem;
-            padding-bottom: 2rem;
+            padding-bottom: 3rem;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# Título más pequeño para no robar espacio
-st.markdown("### 🎾 Tenis Lab: Análisis")
+st.markdown("### 🎾 Tenis Lab")
 
 # --- MOTOR IA ---
 @st.cache_resource
@@ -45,6 +40,10 @@ def cargar_modelo():
     )
 
 pose = cargar_modelo()
+
+# --- GESTIÓN DE MEMORIA VISUAL (Anti-Parpadeo) ---
+if 'last_frame_bgr' not in st.session_state:
+    st.session_state['last_frame_bgr'] = None
 
 # --- CARGA DE ARCHIVO ---
 uploaded_file = st.file_uploader("Carga video", type=['mp4', 'mov', 'avi'])
@@ -66,48 +65,51 @@ if uploaded_file is not None:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
-        # --- EL CAMBIO CLAVE DE INTERFAZ ---
-        
-        # 1. Reservamos el lugar del video ARRIBA
+        # 1. Creamos el espacio del video ARRIBA
         video_placeholder = st.empty()
         
+        # TRUCO: Si ya tenemos una imagen en memoria, la mostramos YA MISMO.
+        # Esto evita que la pantalla se quede en blanco mientras calculamos el nuevo frame.
+        if st.session_state['last_frame_bgr'] is not None:
+            video_placeholder.image(st.session_state['last_frame_bgr'], channels="BGR", use_container_width=True)
+
         # 2. Ponemos el slider ABAJO
-        # Label colapsado para ahorrar espacio visual
-        frame_index = st.slider("Buscar golpe", 0, total_frames - 1, 0, label_visibility="collapsed")
+        frame_index = st.slider("Buscar golpe", 0, total_frames - 1, 0)
         
-        # 3. Lógica
+        # 3. Calculamos el NUEVO frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         ret, frame = cap.read()
         
         if ret:
-            # Procesamiento IA
+            # Redimensionar
+            h, w = frame.shape[:2]
+            # Procesar IA
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = pose.process(frame_rgb)
             
-            # Dibujo Fino
+            # Dibujo Fino (Negro y Rojo pequeño)
             if results.pose_landmarks:
                 lm = results.pose_landmarks.landmark
-                h, w = frame.shape[:2] # Usamos tamaño original para mejor calidad
                 
-                # Líneas Negras Finas
+                # Líneas Negras Finas (Grosor 1)
                 for p_start, p_end in CONEXIONES_TENIS:
                     if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
                         pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
                         pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
                         cv2.line(frame, pt1, pt2, (0, 0, 0), 1, cv2.LINE_AA)
 
-                # Puntos Rojos Pequeños
+                # Puntos Rojos Pequeños (Radio 2)
                 for i in PUNTOS_CLAVE:
                     p = lm[i]
                     if p.visibility > 0.5:
                         center = (int(p.x*w), int(p.y*h))
-                        cv2.circle(frame, center, 3, (0, 0, 255), -1, cv2.LINE_AA)
+                        cv2.circle(frame, center, 2, (0, 0, 255), -1, cv2.LINE_AA)
 
-            # 4. Actualizamos el lugar reservado ARRIBA
-            # use_container_width=True hace que el video ocupe todo el ancho del celular
+            # 4. ACTUALIZAMOS EL VIDEO y guardamos en memoria
             video_placeholder.image(frame, channels="BGR", use_container_width=True)
+            st.session_state['last_frame_bgr'] = frame # Guardar en memoria para la próxima vuelta
             
-            st.caption(f"Frame: {frame_index}/{total_frames}")
+            st.caption(f"Frame: {frame_index}")
             
         else:
             st.warning("Mueve el slider.")
