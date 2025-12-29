@@ -1,57 +1,58 @@
-import os
-
-# --- 🛠️ CORRECCIÓN DE PERMISOS (EL TRUCO DE INGENIERO) ---
-# Antes de importar MediaPipe, le decimos que guarde sus modelos
-# en la carpeta temporal (/tmp) donde SIEMPRE tenemos permiso de escritura.
-os.environ["MEDIAPIPE_ASSET_CACHE_DIR"] = "/tmp"
-
 import streamlit as st
 import cv2
 import tempfile
 import numpy as np
 import mediapipe as mp
+import os
 import gc
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Tenis Lab Móvil", layout="wide")
 
+# CSS para ajustar espacios y botones grandes
 st.markdown("""
     <style>
         .stDeployButton {display:none;}
         footer {visibility: hidden;}
-        .block-container {padding: 1rem 0.5rem !important;}
+        header {visibility: hidden;}
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        /* Botones grandes para el dedo */
         .stButton button {
             width: 100%;
-            height: 60px;
             font-weight: bold;
             font-size: 24px;
+            height: 60px;
         }
     </style>
 """, unsafe_allow_html=True)
 
-st.write("### 🎾 Tenis Lab: Análisis Móvil")
+st.markdown("##### 🎾 Tenis Lab: Análisis")
 
-# --- MOTOR IA (VERSIÓN CLÁSICA ROBUSTA) ---
-# Usamos mp.solutions.pose que es más estable, pero con el arreglo de carpeta de arriba.
-if 'pose' not in st.session_state:
+# --- MOTOR IA ---
+@st.cache_resource
+def cargar_modelo():
     mp_pose = mp.solutions.pose
-    st.session_state.pose = mp_pose.Pose(
+    return mp_pose.Pose(
         static_image_mode=False,
-        model_complexity=0,      # 0 = Lite (Rápido para celular)
+        model_complexity=1, 
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
 
-pose = st.session_state.pose
+pose = cargar_modelo()
 
-# --- MEMORIA DE NAVEGACIÓN ---
+# --- MEMORIA DE POSICIÓN ---
 if 'frame_index' not in st.session_state:
     st.session_state.frame_index = 0
 
-# --- CARGA DE VIDEO ---
-uploaded_file = st.file_uploader("Toca para elegir video", type=['mp4', 'mov', 'avi'])
+# --- CARGA DE ARCHIVO ---
+uploaded_file = st.file_uploader("Carga video", type=['mp4', 'mov', 'avi'])
 
-# CONEXIONES DEL ESQUELETO
 CONEXIONES_TENIS = [
     (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), 
     (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28)
@@ -59,72 +60,69 @@ CONEXIONES_TENIS = [
 PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
 if uploaded_file is not None:
-    # Guardado temporal
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
-    
+    gc.collect()
+
     cap = cv2.VideoCapture(tfile.name)
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
         
-        # --- CONTROLES ---
-        col_video, col_controls = st.columns([1, 100])
-        
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c1:
-            if st.button("◀"):
-                st.session_state.frame_index = max(0, st.session_state.frame_index - 1)
-        with c3:
-            if st.button("▶"):
-                st.session_state.frame_index = min(total_frames - 1, st.session_state.frame_index + 1)
-        with c2:
+        # --- FUNCIONES DE CONTROL ---
+        def siguiente_frame():
+            if st.session_state.frame_index < total_frames - 1:
+                st.session_state.frame_index += 1
+
+        def anterior_frame():
+            if st.session_state.frame_index > 0:
+                st.session_state.frame_index -= 1
+
+        # --- DISEÑO (Video Izq | Controles Der) ---
+        col_video, col_controls = st.columns([80, 20])
+
+        with col_controls:
+            # Botones
+            c_prev, c_next = st.columns(2)
+            with c_prev:
+                st.button("◀", on_click=anterior_frame)
+            with c_next:
+                st.button("▶", on_click=siguiente_frame)
+            
+            # Slider conectado
             st.slider("Timeline", 0, total_frames - 1, key='frame_index', label_visibility="collapsed")
-            st.markdown(f"<p style='text-align: center;'>Cuadro: {st.session_state.frame_index}</p>", unsafe_allow_html=True)
+            st.write(f"Frame: {st.session_state.frame_index}/{total_frames}")
 
-        # --- PROCESAMIENTO ---
-        cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.frame_index)
-        ret, frame = cap.read()
-        
-        if ret:
-            # OPTIMIZACIÓN DE TAMAÑO (Para que no explote la memoria)
-            h, w = frame.shape[:2]
-            ANCHO_MAXIMO = 640 
+        with col_video:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.frame_index)
+            ret, frame = cap.read()
             
-            if w > ANCHO_MAXIMO:
-                factor = ANCHO_MAXIMO / w
-                nuevo_alto = int(h * factor)
-                frame = cv2.resize(frame, (ANCHO_MAXIMO, nuevo_alto))
-                h, w = frame.shape[:2] # Actualizamos dimensiones
-
-            # Procesar IA
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(frame_rgb)
-            
-            if results.pose_landmarks:
-                lm = results.pose_landmarks.landmark
+            if ret:
+                h, w = frame.shape[:2]
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(frame_rgb)
                 
-                # Dibujar esqueleto (Clásico y confiable)
-                for p_start, p_end in CONEXIONES_TENIS:
-                    if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
-                        pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
-                        pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
-                        cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
+                if results.pose_landmarks:
+                    lm = results.pose_landmarks.landmark
+                    
+                    # Líneas Negras (Grosor 2)
+                    for p_start, p_end in CONEXIONES_TENIS:
+                        if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
+                            pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
+                            pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
+                            cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
 
-                for i in PUNTOS_CLAVE:
-                    p = lm[i]
-                    if p.visibility > 0.5:
-                        center = (int(p.x*w), int(p.y*h))
-                        cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
+                    # Puntos Rojos (Radio 4)
+                    for i in PUNTOS_CLAVE:
+                        p = lm[i]
+                        if p.visibility > 0.5:
+                            center = (int(p.x*w), int(p.y*h))
+                            cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
 
-            st.image(frame, channels="BGR", use_container_width=True)
-            
-        else:
-            st.warning("Error leyendo el cuadro.")
-            
+                st.image(frame, channels="BGR", use_container_width=True)
+            else:
+                st.warning("Fin del video.")
+
     cap.release()
-    gc.collect()
-
-else:
-    st.info("👆 Sube un video para empezar")
