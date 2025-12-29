@@ -1,19 +1,28 @@
 import streamlit as st
 import cv2
-import mediapipe as mp
 import numpy as np
 import tempfile
 import time
 import os
 
-st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
-st.title("🎾 Tenis Lab: Análisis Biomecánico")
+# --- IMPORTACIÓN ROBUSTA (NIVEL INGENIERÍA) ---
+try:
+    import mediapipe as mp
+    # Intentamos cargar la solución de pose directamente desde la ruta de archivos
+    from mediapipe.python.solutions import pose as mp_pose
+except Exception as e:
+    st.error(f"Error crítico de librería: {e}")
+    st.info("El servidor no pudo instalar MediaPipe correctamente. Por favor, realiza el paso 3 (Borrar y Recrear).")
+    st.stop()
 
-# --- MOTOR DE IA (Simple, como al principio) ---
+st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
+st.title("🎾 Tenis Lab: Análisis de Impacto")
+
+# --- MOTOR IA ---
 @st.cache_resource
-def load_pose():
-    # Usamos model_complexity=0 porque es el que menos permisos pide
-    return mp.solutions.pose.Pose(
+def load_pose_engine():
+    # model_complexity=0 usa el modelo más ligero que no requiere descargas extras
+    return mp_pose.Pose(
         static_image_mode=False,
         model_complexity=0,
         min_detection_confidence=0.5,
@@ -21,9 +30,9 @@ def load_pose():
     )
 
 try:
-    pose = load_pose()
+    pose_engine = load_pose_engine()
 except Exception as e:
-    st.error(f"Error de inicialización: {e}")
+    st.error(f"Error al iniciar IA: {e}")
     st.stop()
 
 # --- INTERFAZ ---
@@ -31,21 +40,19 @@ uploaded_file = st.file_uploader("Subí tu video aquí", type=['mp4', 'mov', 'av
 mano_dominante = st.sidebar.radio("Mano Dominante", ["Derecha", "Izquierda"])
 run = st.sidebar.checkbox('Analizar / Pausar', value=True)
 
-# Conexiones biomecánicas
+# Conexiones 13 puntos para el esqueleto biomecánico
 CONEXIONES = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
 
 
 if uploaded_file is not None:
-    # Usamos /tmp para que no haya error de escritura
+    # Usamos /tmp para asegurar permisos de escritura
     tfile = tempfile.NamedTemporaryFile(delete=False, dir='/tmp', suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
     
     cap = cv2.VideoCapture(tfile.name)
-    
-    # LA CLAVE: Usamos un placeholder para actualizar la imagen
-    frame_window = st.empty() 
+    frame_window = st.empty() # Placeholder para que el video se mueva
 
     idx_m = 16 if mano_dominante == "Derecha" else 15
     idx_c = 24 if mano_dominante == "Derecha" else 23
@@ -53,15 +60,15 @@ if uploaded_file is not None:
     while cap.isOpened() and run:
         ret, frame = cap.read()
         if not ret:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Reinicia cuando termina
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # Redimensionamos para que viaje rápido por internet
+        # Redimensionar para que el video sea fluido en la web
         frame = cv2.resize(frame, (480, int(frame.shape[0] * 480 / frame.shape[1])))
         h, w = frame.shape[:2]
 
-        # Procesamiento
-        results = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        # Procesar
+        results = pose_engine.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
@@ -81,13 +88,9 @@ if uploaded_file is not None:
             dist = int(mx - cx if mano_dominante == "Derecha" else cx - mx)
             cv2.putText(frame, f"Eje: {dist}px", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # MOSTRAR FRAME ACTUALIZADO
+        # MOSTRAR FRAME ACTUALIZADO (Esto hace que no se quede fijo en el 1er cuadro)
         frame_window.image(frame, channels="BGR", use_container_width=True)
-        
-        # Le damos un respiro al servidor para que el video "fluya"
         time.sleep(0.01)
 
     cap.release()
     os.unlink(tfile.name)
-else:
-    st.info("Subí un video para analizar el plano de impacto.")
