@@ -7,27 +7,30 @@ import os
 import gc
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Tenis Lab Móvil", layout="wide") # 'wide' ayuda en modo horizontal
+st.set_page_config(page_title="Tenis Lab Móvil", layout="wide")
 
-# CSS para ganar espacio y ajustar márgenes
+# CSS para ajustar espacios
 st.markdown("""
     <style>
         .stDeployButton {display:none;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        
-        /* Reducimos los márgenes gigantes de Streamlit */
         .block-container {
             padding-top: 1rem !important;
             padding-bottom: 1rem !important;
             padding-left: 0.5rem !important;
             padding-right: 0.5rem !important;
         }
+        /* Botones más grandes para el dedo */
+        .stButton button {
+            width: 100%;
+            font-weight: bold;
+            font-size: 20px;
+        }
     </style>
 """, unsafe_allow_html=True)
 
-# Título pequeño
-st.markdown("##### 🎾 Tenis Lab")
+st.markdown("##### 🎾 Tenis Lab: Análisis")
 
 # --- MOTOR IA ---
 @st.cache_resource
@@ -42,6 +45,11 @@ def cargar_modelo():
 
 pose = cargar_modelo()
 
+# --- MEMORIA DE POSICIÓN ---
+# Inicializamos el índice del frame si no existe
+if 'frame_index' not in st.session_state:
+    st.session_state.frame_index = 0
+
 # --- CARGA DE ARCHIVO ---
 uploaded_file = st.file_uploader("Carga video", type=['mp4', 'mov', 'avi'])
 
@@ -52,64 +60,74 @@ CONEXIONES_TENIS = [
 PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
 if uploaded_file is not None:
-    # Guardar temporal
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') 
     tfile.write(uploaded_file.read())
     tfile.close()
     gc.collect()
 
     cap = cv2.VideoCapture(tfile.name)
-    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1) # Corrección de rotación
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
         
-        # --- DISEÑO RESPONSIVO (LA SOLUCIÓN) ---
-        # Creamos dos columnas.
-        # En CELULAR VERTICAL: Streamlit las apila (Col 1 arriba, Col 2 abajo).
-        # En CELULAR HORIZONTAL: Streamlit las pone lado a lado.
-        # [85, 15] significa: La columna del video ocupa el 85%, la del slider el 15% (en PC/Horizontal)
-        col_video, col_slider = st.columns([85, 15])
+        # --- FUNCIONES DE CONTROL ---
+        def siguiente_frame():
+            if st.session_state.frame_index < total_frames - 1:
+                st.session_state.frame_index += 1
 
-        # Definimos el Slider PRIMERO (para tener el valor), pero lo dibujamos en la Col 2
-        with col_slider:
-            # Ponemos el slider. En horizontal quedará a la derecha.
-            frame_index = st.slider("Frame", 0, total_frames - 1, 0)
+        def anterior_frame():
+            if st.session_state.frame_index > 0:
+                st.session_state.frame_index -= 1
 
-        # Ahora procesamos y mostramos el video en la Col 1
+        # --- DISEÑO (Dos Columnas: Video | Controles) ---
+        # Ajustamos a [80, 20] para dar espacio a los botones
+        col_video, col_controls = st.columns([80, 20])
+
+        with col_controls:
+            # 1. Botones de Navegación (Uno al lado del otro)
+            c_prev, c_next = st.columns(2)
+            with c_prev:
+                st.button("◀", on_click=anterior_frame)
+            with c_next:
+                st.button("▶", on_click=siguiente_frame)
+            
+            # 2. Slider (Conectado a la memoria 'frame_index')
+            # Al usar key='frame_index', el slider obedece a los botones automáticamente
+            st.slider("Línea de tiempo", 0, total_frames - 1, key='frame_index', label_visibility="collapsed")
+            
+            # Texto informativo
+            st.write(f"Frame: {st.session_state.frame_index}/{total_frames}")
+
         with col_video:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            # Usamos el valor de la sesión
+            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.frame_index)
             ret, frame = cap.read()
             
             if ret:
-                # Redimensionar (Mantener calidad decente pero ligero)
                 h, w = frame.shape[:2]
-                
-                # Procesar IA
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 results = pose.process(frame_rgb)
                 
-                # Dibujo Fino (Negro y Rojo pequeño)
                 if results.pose_landmarks:
                     lm = results.pose_landmarks.landmark
                     
-                    # Líneas Negras Finas (Grosor 1)
+                    # Líneas Negras (Grosor 2)
                     for p_start, p_end in CONEXIONES_TENIS:
                         if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
                             pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
                             pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
-                            cv2.line(frame, pt1, pt2, (0, 0, 0), 1, cv2.LINE_AA)
+                            cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
 
-                    # Puntos Rojos Pequeños (Radio 2)
+                    # Puntos Rojos (Radio 4)
                     for i in PUNTOS_CLAVE:
                         p = lm[i]
                         if p.visibility > 0.5:
                             center = (int(p.x*w), int(p.y*h))
-                            cv2.circle(frame, center, 2, (0, 0, 255), -1, cv2.LINE_AA)
+                            cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
 
-                # Mostrar Imagen Directa (Sin placeholders raros = Cero parpadeo)
                 st.image(frame, channels="BGR", use_container_width=True)
             else:
-                st.warning("No se pudo leer el frame.")
+                st.warning("Fin del video o error de lectura.")
 
     cap.release()
