@@ -3,12 +3,12 @@ import cv2
 import tempfile
 import numpy as np
 import mediapipe as mp
-import time
+import os
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Tenis Lab Pro", layout="centered")
 
-# Ocultar elementos molestos
+# Estilos CSS para ocultar elementos innecesarios
 st.markdown("""
     <style>
         .stDeployButton {display:none;}
@@ -16,14 +16,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🎾 Tenis Lab: Análisis Biomecánico")
+st.title("🎾 Tenis Lab: Analizador de Golpe")
+st.info("💡 Mueve la barra deslizante para analizar el movimiento cuadro por cuadro.")
 
 # --- MOTOR IA ---
 @st.cache_resource
 def cargar_modelo():
     mp_pose = mp.solutions.pose
     return mp_pose.Pose(
-        static_image_mode=False,
+        static_image_mode=False, # False es mejor para video
         model_complexity=1, 
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
@@ -31,6 +32,7 @@ def cargar_modelo():
 
 pose = cargar_modelo()
 
+# --- CARGA DE ARCHIVO ---
 uploaded_file = st.file_uploader("Carga tu video", type=['mp4', 'mov', 'avi'])
 
 CONEXIONES_TENIS = [
@@ -39,64 +41,67 @@ CONEXIONES_TENIS = [
 ]
 
 if uploaded_file is not None:
-    # 1. Guardar y cerrar archivo (Vital)
-    tfile = tempfile.NamedTemporaryFile(delete=False) 
-    tfile.write(uploaded_file.read())
-    tfile.close()
+    # 1. Guardar video en disco (Usamos os.getcwd para asegurar persistencia)
+    temp_path = os.path.join(os.getcwd(), "temp_video_input.mp4")
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
     
-    cap = cv2.VideoCapture(tfile.name)
+    # 2. Abrir video para leer propiedades
+    cap = cv2.VideoCapture(temp_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # 2. CALCULAR TAMAÑO PERFECTO (Para que no se vea cortado)
-    original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    # Fijamos un ancho seguro para internet (600px) y calculamos la altura proporcional
-    new_width = 600
-    aspect_ratio = original_height / original_width
-    new_height = int(new_width * aspect_ratio)
-    
-    st_frame = st.empty()
-    frame_count = 0
-
-    while cap.isOpened():
+    if total_frames > 0:
+        # --- INTERFAZ DE CONTROL ---
+        # Slider para elegir el frame exacto
+        frame_index = st.slider("Mueve la barra para ver el golpe", 0, total_frames - 1, 0)
+        
+        # Ir al frame seleccionado
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame_count += 1
         
-        # --- ESTRATEGIA DE FLUIDEZ ---
-        # No saltamos frames (para que veas todo), pero bajamos la resolución
-        # para que viaje rápido por internet.
-        
-        # Redimensionar respetando la proporción original
-        frame = cv2.resize(frame, (new_width, new_height))
-        
-        # Procesar
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(frame_rgb)
-
-        # Dibujar
-        if results.pose_landmarks:
-            lm = results.pose_landmarks.landmark
+        if ret:
+            # --- PROCESAMIENTO DEL FRAME ELEGIDO ---
             
-            # Dibujamos sobre el frame
-            for p_start, p_end in CONEXIONES_TENIS:
-                if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
-                    pt1 = (int(lm[p_start].x * new_width), int(lm[p_start].y * new_height))
-                    pt2 = (int(lm[p_end].x * new_width), int(lm[p_end].y * new_height))
-                    cv2.line(frame, pt1, pt2, (255, 255, 255), 1)
+            # Redimensionar para que entre bien en pantalla
+            # Mantenemos proporción pero limitamos ancho a 700px
+            h_orig, w_orig = frame.shape[:2]
+            aspect = h_orig / w_orig
+            new_w = 700
+            new_h = int(new_w * aspect)
+            frame = cv2.resize(frame, (new_w, new_h))
+            
+            # Procesar IA
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = pose.process(frame_rgb)
+            
+            # --- DIBUJADO ---
+            if results.pose_landmarks:
+                lm = results.pose_landmarks.landmark
+                
+                # Líneas blancas
+                for p_start, p_end in CONEXIONES_TENIS:
+                    if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
+                        pt1 = (int(lm[p_start].x * new_w), int(lm[p_start].y * new_h))
+                        pt2 = (int(lm[p_end].x * new_w), int(lm[p_end].y * new_h))
+                        cv2.line(frame, pt1, pt2, (255, 255, 255), 2)
 
-            for i in [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
-                p = lm[i]
-                if p.visibility > 0.5:
-                    cv2.circle(frame, (int(p.x*new_width), int(p.y*new_height)), 4, (0, 0, 255), -1)
+                # Puntos rojos
+                for i in [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
+                    p = lm[i]
+                    if p.visibility > 0.5:
+                        cv2.circle(frame, (int(p.x*new_w), int(p.y*new_h)), 5, (0, 0, 255), -1)
 
-        # Mostrar frame a frame
-        st_frame.image(frame, channels="BGR", use_container_width=True)
-        
-        # --- CONTROL DE VELOCIDAD ---
-        # Pequeña pausa para que la imagen llegue al navegador antes de enviar la siguiente
-        time.sleep(0.03)
+                # --- LÓGICA DE TENIS (Opcional: Ver impacto) ---
+                # Si quieres medir distancias en el frame congelado
+                # idx_cadera = 24 # Derecha
+                # idx_muneca = 16
+                # ... lógica de distancia aquí ...
 
+            # Mostrar imagen final estática
+            st.image(frame, channels="BGR", use_container_width=True)
+            st.caption(f"Analizando Frame: {frame_index}")
+            
+        else:
+            st.error("No se pudo leer el frame seleccionado.")
+            
     cap.release()
