@@ -54,73 +54,66 @@ CONEXIONES_TENIS = [
 ]
 PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
-# Índices Mano Derecha
+# Índices Necesarios (Brazo Derecho)
+ELBOW_IDX = 14
 WRIST_IDX = 16
-PINKY_IDX = 18 # Usamos Meñique como reemplazo del Anular (la IA no tiene anular)
 INDEX_IDX = 20
 
-# --- CÁLCULO VECTORIAL ---
-def estimar_vector_raqueta(frame, landmarks, w, h):
+# --- CÁLCULO VECTORIAL (NUEVO ENFOQUE) ---
+def dibujar_vector_indice(frame, landmarks, w, h):
     try:
-        # 1. Coordenadas del Triángulo de la Mano
+        # 1. Obtener coordenadas Codo, Muñeca, Índice
+        p_elbow = np.array([landmarks[ELBOW_IDX].x * w, landmarks[ELBOW_IDX].y * h])
         p_wrist = np.array([landmarks[WRIST_IDX].x * w, landmarks[WRIST_IDX].y * h])
         p_index = np.array([landmarks[INDEX_IDX].x * w, landmarks[INDEX_IDX].y * h])
-        p_pinky = np.array([landmarks[PINKY_IDX].x * w, landmarks[PINKY_IDX].y * h])
         
-        # Validar visibilidad
-        if (landmarks[WRIST_IDX].visibility < 0.5 or 
-            landmarks[INDEX_IDX].visibility < 0.5 or 
-            landmarks[PINKY_IDX].visibility < 0.5):
+        # Validar visibilidad de los tres puntos
+        if (landmarks[ELBOW_IDX].visibility < 0.5 or 
+            landmarks[WRIST_IDX].visibility < 0.5 or 
+            landmarks[INDEX_IDX].visibility < 0.5):
             return frame
 
-        # 2. Calcular el Eje del Mango (Centro de la Raqueta)
-        # Promedio de los nudillos para encontrar el centro de la mano
-        knuckles_center = (p_index + p_pinky) / 2.0
+        # 2. DIBUJAR LÍNEA DE ALINEACIÓN (Codo -> Muñeca -> Índice)
+        # Color: Violeta azulado (BGR)
+        line_color = (255, 100, 50) 
+        thickness_line = 3
         
-        # Vector Dirección: Desde Muñeca hacia Nudillos
-        handle_vector = knuckles_center - p_wrist
-        handle_len = np.linalg.norm(handle_vector)
+        # Convertir a tuplas de enteros para OpenCV
+        pt_elbow = tuple(p_elbow.astype(int))
+        pt_wrist = tuple(p_wrist.astype(int))
+        pt_index = tuple(p_index.astype(int))
         
-        if handle_len < 1e-6: return frame
-            
-        handle_dir = handle_vector / handle_len
-        
-        # Estimamos el centro de la raqueta (aprox 3.5 veces la distancia muñeca-nudillo)
-        racket_len_px = handle_len * 3.5
-        racket_center = p_wrist + (handle_dir * racket_len_px)
+        cv2.line(frame, pt_elbow, pt_wrist, line_color, thickness_line, cv2.LINE_AA)
+        cv2.line(frame, pt_wrist, pt_index, line_color, thickness_line, cv2.LINE_AA)
 
-        # 3. Calcular la Normal (Cara de la Raqueta)
-        # Vector que une los nudillos (define el plano ancho de la mano)
-        knuckle_vector = p_index - p_pinky
-        
-        # Vector Perpendicular (Normal) a los nudillos
-        # Esto nos dice hacia dónde mira la palma
-        normal_vec = np.array([-knuckle_vector[1], knuckle_vector[0]])
-        
-        # Normalizar
-        normal_len = np.linalg.norm(normal_vec)
-        if normal_len < 1e-6: return frame
-        normal_dir = normal_vec / normal_len
-        
-        # 4. Extender la Flecha (El doble de largo que antes)
-        # Antes era racket_len_px / 2.0, ahora usamos racket_len_px * 1.0 (Largo completo)
-        arrow_length = racket_len_px 
-        arrow_end = racket_center + (normal_dir * arrow_length)
+        # 3. CALCULAR Y DIBUJAR FLECHA DE EXTENSIÓN
+        # La dirección la marca el segmento Muñeca -> Índice
+        direction_vec = p_index - p_wrist
+        current_len = np.linalg.norm(direction_vec)
 
-        # --- DIBUJADO ---
-        # Centro (Amarillo)
-        cv2.circle(frame, (int(racket_center[0]), int(racket_center[1])), 8, (0, 255, 255), -1, cv2.LINE_AA)
+        if current_len < 1e-6: return frame
+        direction_norm = direction_vec / current_len
         
-        # Flecha Vector (Verde Lima Brillante)
+        # Largo de la flecha: Usamos el largo del antebrazo como referencia de escala
+        forearm_len = np.linalg.norm(p_wrist - p_elbow)
+        extension_len = forearm_len * 1.5 # 1.5 veces el largo del antebrazo
+
+        # Inicio y Fin de la flecha
+        arrow_start = pt_index
+        arrow_end_np = p_index + (direction_norm * extension_len)
+        arrow_end = tuple(arrow_end_np.astype(int))
+
+        # Flecha Vector (Verde Lima) que sale del Índice
         cv2.arrowedLine(frame, 
-                        (int(racket_center[0]), int(racket_center[1])), 
-                        (int(arrow_end[0]), int(arrow_end[1])), 
+                        arrow_start, 
+                        arrow_end, 
                         (50, 255, 50), # Verde Lima
-                        4,             # Grosor extra
+                        4,             # Grosor
                         cv2.LINE_AA, 
                         tipLength=0.2)
                         
-    except:
+    except Exception as e:
+        print(f"Error en cálculo vectorial: {e}")
         pass
     return frame
 
@@ -170,21 +163,22 @@ if uploaded_file is not None:
                 if results.pose_landmarks:
                     lm = results.pose_landmarks.landmark
                     
-                    # Esqueleto Fuerte
+                    # 1. Esqueleto Base (Negro)
                     for p_start, p_end in CONEXIONES_TENIS:
                         if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
                             pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
                             pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
                             cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
 
+                    # 2. Vector de Alineación e Índice (Nuevo)
+                    frame = dibujar_vector_indice(frame, lm, w, h)
+                    
+                    # 3. Puntos Rojos (Encima de todo)
                     for i in PUNTOS_CLAVE:
                         p = lm[i]
                         if p.visibility > 0.5:
                             center = (int(p.x*w), int(p.y*h))
                             cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
-                    
-                    # Vector Raqueta
-                    frame = estimar_vector_raqueta(frame, lm, w, h)
 
                 st.image(frame, channels="BGR", use_container_width=True)
             else:
