@@ -29,7 +29,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("##### 🎾 Tenis Lab: Análisis Vectorial")
+st.markdown("##### 🎾 Tenis Lab: Mapa de Puntos")
 
 # --- MOTOR IA ---
 @st.cache_resource
@@ -44,77 +44,62 @@ def cargar_modelo():
 
 pose = cargar_modelo()
 
-# --- MEMORIA ---
 if 'frame_index' not in st.session_state:
     st.session_state.frame_index = 0
 
-CONEXIONES_TENIS = [
-    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), 
-    (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28)
-]
-PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
+# --- PUNTOS DISPONIBLES EN EL BRAZO DERECHO ---
+# Estos son los únicos que ve la IA
+PUNTOS_BRAZO = {
+    12: "Hombro",
+    14: "Codo",
+    16: "Muñeca",
+    18: "Meñique",
+    20: "Indice",
+    22: "Pulgar"
+}
 
-# Índices Necesarios (Brazo Derecho)
-ELBOW_IDX = 14
-WRIST_IDX = 16
-INDEX_IDX = 20
+def dibujar_diagnostico_mano(frame, landmarks, w, h):
+    overlay = frame.copy()
+    
+    # 1. DIBUJAR TODOS LOS PUNTOS DISPONIBLES
+    for idx, nombre in PUNTOS_BRAZO.items():
+        lm = landmarks[idx]
+        if lm.visibility > 0.5:
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            
+            # Dibujar punto
+            cv2.circle(frame, (cx, cy), 6, (255, 0, 0), -1, cv2.LINE_AA) # Azul
+            
+            # Escribir nombre del punto
+            cv2.putText(frame, str(idx), (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
-# --- CÁLCULO VECTORIAL (NUEVO ENFOQUE) ---
-def dibujar_vector_indice(frame, landmarks, w, h):
+    # 2. DIBUJAR EL PLANO DE LA PALMA (TRIÁNGULO)
+    # Usamos Muñeca(16), Meñique(18), Índice(20)
     try:
-        # 1. Obtener coordenadas Codo, Muñeca, Índice
-        p_elbow = np.array([landmarks[ELBOW_IDX].x * w, landmarks[ELBOW_IDX].y * h])
-        p_wrist = np.array([landmarks[WRIST_IDX].x * w, landmarks[WRIST_IDX].y * h])
-        p_index = np.array([landmarks[INDEX_IDX].x * w, landmarks[INDEX_IDX].y * h])
-        
-        # Validar visibilidad de los tres puntos
-        if (landmarks[ELBOW_IDX].visibility < 0.5 or 
-            landmarks[WRIST_IDX].visibility < 0.5 or 
-            landmarks[INDEX_IDX].visibility < 0.5):
-            return frame
-
-        # 2. DIBUJAR LÍNEA DE ALINEACIÓN (Codo -> Muñeca -> Índice)
-        # Color: Violeta azulado (BGR)
-        line_color = (255, 100, 50) 
-        thickness_line = 3
-        
-        # Convertir a tuplas de enteros para OpenCV
-        pt_elbow = tuple(p_elbow.astype(int))
-        pt_wrist = tuple(p_wrist.astype(int))
-        pt_index = tuple(p_index.astype(int))
-        
-        cv2.line(frame, pt_elbow, pt_wrist, line_color, thickness_line, cv2.LINE_AA)
-        cv2.line(frame, pt_wrist, pt_index, line_color, thickness_line, cv2.LINE_AA)
-
-        # 3. CALCULAR Y DIBUJAR FLECHA DE EXTENSIÓN
-        # La dirección la marca el segmento Muñeca -> Índice
-        direction_vec = p_index - p_wrist
-        current_len = np.linalg.norm(direction_vec)
-
-        if current_len < 1e-6: return frame
-        direction_norm = direction_vec / current_len
-        
-        # Largo de la flecha: Usamos el largo del antebrazo como referencia de escala
-        forearm_len = np.linalg.norm(p_wrist - p_elbow)
-        extension_len = forearm_len * 1.5 # 1.5 veces el largo del antebrazo
-
-        # Inicio y Fin de la flecha
-        arrow_start = pt_index
-        arrow_end_np = p_index + (direction_norm * extension_len)
-        arrow_end = tuple(arrow_end_np.astype(int))
-
-        # Flecha Vector (Verde Lima) que sale del Índice
-        cv2.arrowedLine(frame, 
-                        arrow_start, 
-                        arrow_end, 
-                        (50, 255, 50), # Verde Lima
-                        4,             # Grosor
-                        cv2.LINE_AA, 
-                        tipLength=0.2)
-                        
-    except Exception as e:
-        print(f"Error en cálculo vectorial: {e}")
+        if (landmarks[16].visibility > 0.5 and 
+            landmarks[18].visibility > 0.5 and 
+            landmarks[20].visibility > 0.5):
+            
+            p16 = np.array([landmarks[16].x * w, landmarks[16].y * h]).astype(int)
+            p18 = np.array([landmarks[18].x * w, landmarks[18].y * h]).astype(int)
+            p20 = np.array([landmarks[20].x * w, landmarks[20].y * h]).astype(int)
+            
+            # Dibujar Triángulo Relleno (Semi-transparente)
+            triangle_cnt = np.array([p16, p20, p18])
+            cv2.drawContours(overlay, [triangle_cnt], 0, (0, 255, 255), -1) # Amarillo
+            
+            # Mezclar para transparencia
+            alpha = 0.4
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+            
+            # Dibujar bordes del triángulo
+            cv2.line(frame, tuple(p16), tuple(p20), (0, 255, 0), 2)
+            cv2.line(frame, tuple(p20), tuple(p18), (0, 255, 0), 2)
+            cv2.line(frame, tuple(p18), tuple(p16), (0, 255, 0), 2)
+            
+    except:
         pass
+
     return frame
 
 # --- CARGA ---
@@ -131,23 +116,19 @@ if uploaded_file is not None:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
-        
         def siguiente_frame():
             if st.session_state.frame_index < total_frames - 1:
                 st.session_state.frame_index += 1
-
         def anterior_frame():
             if st.session_state.frame_index > 0:
                 st.session_state.frame_index -= 1
 
-        # Diseño
         col_video, col_controls = st.columns([80, 20])
 
         with col_controls:
             c_prev, c_next = st.columns(2)
             with c_prev: st.button("◀", on_click=anterior_frame)
             with c_next: st.button("▶", on_click=siguiente_frame)
-            
             st.slider("Timeline", 0, total_frames - 1, key='frame_index', label_visibility="collapsed")
             st.write(f"Frame: {st.session_state.frame_index}/{total_frames}")
 
@@ -162,26 +143,10 @@ if uploaded_file is not None:
                 
                 if results.pose_landmarks:
                     lm = results.pose_landmarks.landmark
-                    
-                    # 1. Esqueleto Base (Negro)
-                    for p_start, p_end in CONEXIONES_TENIS:
-                        if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
-                            pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
-                            pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
-                            cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
-
-                    # 2. Vector de Alineación e Índice (Nuevo)
-                    frame = dibujar_vector_indice(frame, lm, w, h)
-                    
-                    # 3. Puntos Rojos (Encima de todo)
-                    for i in PUNTOS_CLAVE:
-                        p = lm[i]
-                        if p.visibility > 0.5:
-                            center = (int(p.x*w), int(p.y*h))
-                            cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
+                    # Solo dibujamos el diagnóstico de puntos
+                    frame = dibujar_diagnostico_mano(frame, lm, w, h)
 
                 st.image(frame, channels="BGR", use_container_width=True)
             else:
                 st.warning("Fin del video.")
-
     cap.release()
