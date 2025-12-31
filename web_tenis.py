@@ -29,7 +29,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("##### 🎾 Tenis Lab: Mapa de Puntos")
+st.markdown("##### 🎾 Tenis Lab: Proyecciones")
 
 # --- MOTOR IA ---
 @st.cache_resource
@@ -47,59 +47,70 @@ pose = cargar_modelo()
 if 'frame_index' not in st.session_state:
     st.session_state.frame_index = 0
 
-# --- PUNTOS DISPONIBLES EN EL BRAZO DERECHO ---
-# Estos son los únicos que ve la IA
-PUNTOS_BRAZO = {
-    12: "Hombro",
-    14: "Codo",
-    16: "Muñeca",
-    18: "Meñique",
-    20: "Indice",
-    22: "Pulgar"
-}
+CONEXIONES_TENIS = [
+    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), 
+    (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28)
+]
+PUNTOS_CLAVE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
-def dibujar_diagnostico_mano(frame, landmarks, w, h):
-    overlay = frame.copy()
-    
-    # 1. DIBUJAR TODOS LOS PUNTOS DISPONIBLES
-    for idx, nombre in PUNTOS_BRAZO.items():
-        lm = landmarks[idx]
-        if lm.visibility > 0.5:
-            cx, cy = int(lm.x * w), int(lm.y * h)
-            
-            # Dibujar punto
-            cv2.circle(frame, (cx, cy), 6, (255, 0, 0), -1, cv2.LINE_AA) # Azul
-            
-            # Escribir nombre del punto
-            cv2.putText(frame, str(idx), (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+# Índices (Brazo Derecho)
+ELBOW_IDX = 14
+WRIST_IDX = 16
+INDEX_IDX = 20
 
-    # 2. DIBUJAR EL PLANO DE LA PALMA (TRIÁNGULO)
-    # Usamos Muñeca(16), Meñique(18), Índice(20)
+# --- FUNCION DE PROYECCIONES ---
+def dibujar_proyecciones(frame, landmarks, w, h):
     try:
-        if (landmarks[16].visibility > 0.5 and 
-            landmarks[18].visibility > 0.5 and 
-            landmarks[20].visibility > 0.5):
+        # Coordenadas
+        p_elbow = np.array([landmarks[ELBOW_IDX].x * w, landmarks[ELBOW_IDX].y * h])
+        p_wrist = np.array([landmarks[WRIST_IDX].x * w, landmarks[WRIST_IDX].y * h])
+        p_index = np.array([landmarks[INDEX_IDX].x * w, landmarks[INDEX_IDX].y * h])
+        
+        if (landmarks[ELBOW_IDX].visibility < 0.5 or 
+            landmarks[WRIST_IDX].visibility < 0.5 or 
+            landmarks[INDEX_IDX].visibility < 0.5):
+            return frame
+
+        # Referencia de largo: Usamos la distancia del antebrazo
+        forearm_dist = np.linalg.norm(p_wrist - p_elbow)
+        extension_len = forearm_dist * 1.2 # Un poco más largo que el antebrazo
+
+        # --- 1. PROYECCIÓN DEL ANTEBRAZO (AZUL) ---
+        # Dirección: Codo -> Muñeca
+        vec_forearm = p_wrist - p_elbow
+        norm_forearm = np.linalg.norm(vec_forearm)
+        
+        if norm_forearm > 1e-6:
+            dir_forearm = vec_forearm / norm_forearm
+            # Comienza en la Muñeca, sigue la línea del antebrazo
+            end_forearm = p_wrist + (dir_forearm * extension_len)
             
-            p16 = np.array([landmarks[16].x * w, landmarks[16].y * h]).astype(int)
-            p18 = np.array([landmarks[18].x * w, landmarks[18].y * h]).astype(int)
-            p20 = np.array([landmarks[20].x * w, landmarks[20].y * h]).astype(int)
+            # Dibujamos línea punteada azul (simulada con círculos o línea delgada)
+            cv2.arrowedLine(frame, 
+                            tuple(p_wrist.astype(int)), 
+                            tuple(end_forearm.astype(int)), 
+                            (255, 200, 0), # Azul Cielo
+                            2, cv2.LINE_AA, tipLength=0.1)
+
+        # --- 2. PROYECCIÓN DE LA MANO (VERDE) ---
+        # Dirección: Muñeca -> Índice
+        vec_hand = p_index - p_wrist
+        norm_hand = np.linalg.norm(vec_hand)
+        
+        if norm_hand > 1e-6:
+            dir_hand = vec_hand / norm_hand
+            # Comienza en el Índice, sigue la línea de la mano
+            end_hand = p_index + (dir_hand * extension_len)
             
-            # Dibujar Triángulo Relleno (Semi-transparente)
-            triangle_cnt = np.array([p16, p20, p18])
-            cv2.drawContours(overlay, [triangle_cnt], 0, (0, 255, 255), -1) # Amarillo
-            
-            # Mezclar para transparencia
-            alpha = 0.4
-            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-            
-            # Dibujar bordes del triángulo
-            cv2.line(frame, tuple(p16), tuple(p20), (0, 255, 0), 2)
-            cv2.line(frame, tuple(p20), tuple(p18), (0, 255, 0), 2)
-            cv2.line(frame, tuple(p18), tuple(p16), (0, 255, 0), 2)
-            
+            # Dibujamos flecha verde gruesa (La dirección real del golpe)
+            cv2.arrowedLine(frame, 
+                            tuple(p_index.astype(int)), 
+                            tuple(end_hand.astype(int)), 
+                            (0, 255, 0), # Verde Lima
+                            4, cv2.LINE_AA, tipLength=0.2)
+
     except:
         pass
-
     return frame
 
 # --- CARGA ---
@@ -116,6 +127,7 @@ if uploaded_file is not None:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames > 0:
+        
         def siguiente_frame():
             if st.session_state.frame_index < total_frames - 1:
                 st.session_state.frame_index += 1
@@ -143,8 +155,22 @@ if uploaded_file is not None:
                 
                 if results.pose_landmarks:
                     lm = results.pose_landmarks.landmark
-                    # Solo dibujamos el diagnóstico de puntos
-                    frame = dibujar_diagnostico_mano(frame, lm, w, h)
+                    
+                    # Esqueleto Base
+                    for p_start, p_end in CONEXIONES_TENIS:
+                        if lm[p_start].visibility > 0.5 and lm[p_end].visibility > 0.5:
+                            pt1 = (int(lm[p_start].x * w), int(lm[p_start].y * h))
+                            pt2 = (int(lm[p_end].x * w), int(lm[p_end].y * h))
+                            cv2.line(frame, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
+                    
+                    for i in PUNTOS_CLAVE:
+                        p = lm[i]
+                        if p.visibility > 0.5:
+                            center = (int(p.x*w), int(p.y*h))
+                            cv2.circle(frame, center, 4, (0, 0, 255), -1, cv2.LINE_AA)
+
+                    # PROYECCIONES
+                    frame = dibujar_proyecciones(frame, lm, w, h)
 
                 st.image(frame, channels="BGR", use_container_width=True)
             else:
